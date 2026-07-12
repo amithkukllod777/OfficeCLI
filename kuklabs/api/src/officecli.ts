@@ -26,20 +26,28 @@ export function runOfficeCli(args: string[], timeout = timeoutMs): Promise<Comma
 
     let stdout = '';
     let stderr = '';
-    const timer = setTimeout(() => {
-      child.kill('SIGKILL');
-      reject(new Error(`OfficeCLI command timed out after ${timeout}ms`));
-    }, timeout);
+    let settled = false;
 
-    child.stdout.setEncoding('utf8');
-    child.stderr.setEncoding('utf8');
-    child.stdout.on('data', chunk => { stdout += chunk; });
-    child.stderr.on('data', chunk => { stderr += chunk; });
-    child.once('error', error => {
+    const finishReject = (error: Error): void => {
+      if (settled) return;
+      settled = true;
       clearTimeout(timer);
       reject(error);
-    });
+    };
+
+    const timer = setTimeout(() => {
+      child.kill('SIGKILL');
+      finishReject(new Error(`OfficeCLI command timed out after ${timeout}ms`));
+    }, timeout);
+
+    child.stdout?.setEncoding('utf8');
+    child.stderr?.setEncoding('utf8');
+    child.stdout?.on('data', chunk => { stdout += String(chunk); });
+    child.stderr?.on('data', chunk => { stderr += String(chunk); });
+    child.once('error', error => finishReject(error));
     child.once('close', code => {
+      if (settled) return;
+      settled = true;
       clearTimeout(timer);
       resolve({ code: code ?? 1, stdout, stderr });
     });
