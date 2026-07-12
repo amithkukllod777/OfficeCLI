@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process';
 import { access } from 'node:fs/promises';
+import type { Readable } from 'node:stream';
 
 export interface CommandResult {
   code: number;
@@ -24,28 +25,36 @@ export function runOfficeCli(args: string[], timeout = timeoutMs): Promise<Comma
       stdio: ['ignore', 'pipe', 'pipe']
     });
 
+    const stdoutStream = child.stdout as Readable | null;
+    const stderrStream = child.stderr as Readable | null;
     let stdout = '';
     let stderr = '';
     let settled = false;
+    let timer: NodeJS.Timeout;
 
-    const finishReject = (error: Error): void => {
+    const rejectOnce = (error: Error): void => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
       reject(error);
     };
 
-    const timer = setTimeout(() => {
+    timer = setTimeout(() => {
       child.kill('SIGKILL');
-      finishReject(new Error(`OfficeCLI command timed out after ${timeout}ms`));
+      rejectOnce(new Error(`OfficeCLI command timed out after ${timeout}ms`));
     }, timeout);
 
-    child.stdout?.setEncoding('utf8');
-    child.stderr?.setEncoding('utf8');
-    child.stdout?.on('data', chunk => { stdout += String(chunk); });
-    child.stderr?.on('data', chunk => { stderr += String(chunk); });
-    child.once('error', error => finishReject(error));
-    child.once('close', code => {
+    if (!stdoutStream || !stderrStream) {
+      rejectOnce(new Error('OfficeCLI process streams are unavailable'));
+      return;
+    }
+
+    stdoutStream.setEncoding('utf8');
+    stderrStream.setEncoding('utf8');
+    stdoutStream.on('data', (chunk: string | Buffer) => { stdout += chunk.toString(); });
+    stderrStream.on('data', (chunk: string | Buffer) => { stderr += chunk.toString(); });
+    child.once('error', (error: Error) => rejectOnce(error));
+    child.once('close', (code: number | null) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
