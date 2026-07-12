@@ -13,10 +13,10 @@ const workRoot = process.env.KUKDOCS_WORK_ROOT ?? '/tmp/kukdocs';
 const apiKey = process.env.KUKDOCS_API_KEY;
 const allowedExtensions = new Set(['.docx', '.xlsx', '.pptx']);
 
-app.addHook('onRequest', async request => {
+app.addHook('onRequest', async (request, reply) => {
   if (!apiKey || request.url === '/health') return;
   if (request.headers['x-api-key'] !== apiKey) {
-    throw app.httpErrors.unauthorized('Invalid API key');
+    return reply.code(401).send({ error: 'Invalid API key' });
   }
 });
 
@@ -40,7 +40,8 @@ app.post('/v1/documents', async (request, reply) => {
   const jobId = nanoid();
   const dir = join(workRoot, jobId);
   await mkdir(dir, { recursive: true });
-  const filename = sanitizeFilename(input.filename ?? `document.${input.format}`, `document.${input.format}`);
+  const requestedName = input.filename ?? `document.${input.format}`;
+  const filename = ensureExtension(sanitizeFilename(requestedName, `document.${input.format}`), input.format);
   const output = join(dir, filename);
 
   const result = await runOfficeCli(['create', output]);
@@ -49,7 +50,7 @@ app.post('/v1/documents', async (request, reply) => {
     return reply.code(422).send({ jobId, status: 'failed', error: result.stderr || result.stdout });
   }
 
-  return reply.code(201).send({ jobId, status: 'completed', outputPath: output });
+  return reply.code(201).send({ jobId, status: 'completed', filename });
 });
 
 app.post('/v1/documents/inspect', async (request, reply) => {
@@ -65,11 +66,13 @@ app.post('/v1/documents/inspect', async (request, reply) => {
   const inputPath = join(dir, sanitizeFilename(part.filename, `input${extension}`));
   await writeFile(inputPath, await part.toBuffer(), { flag: 'wx' });
 
-  const result = await runOfficeCli(['view', inputPath, 'outline']);
-  await rm(dir, { recursive: true, force: true });
-  if (result.code !== 0) return reply.code(422).send({ jobId, status: 'failed', error: result.stderr || result.stdout });
-
-  return { jobId, status: 'completed', outline: result.stdout };
+  try {
+    const result = await runOfficeCli(['view', inputPath, 'outline']);
+    if (result.code !== 0) return reply.code(422).send({ jobId, status: 'failed', error: result.stderr || result.stdout });
+    return { jobId, status: 'completed', outline: result.stdout };
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 });
 
 app.setErrorHandler((error, _request, reply) => {
@@ -81,6 +84,11 @@ app.setErrorHandler((error, _request, reply) => {
 function sanitizeFilename(value: string, fallback: string): string {
   const name = basename(value).replace(/[^a-zA-Z0-9._-]/g, '_');
   return name.length > 0 ? name : fallback;
+}
+
+function ensureExtension(filename: string, format: 'docx' | 'xlsx' | 'pptx'): string {
+  const expected = `.${format}`;
+  return extname(filename).toLowerCase() === expected ? filename : `${filename.replace(/\.[^.]+$/, '')}${expected}`;
 }
 
 await mkdir(workRoot, { recursive: true });
