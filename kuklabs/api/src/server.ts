@@ -1,7 +1,8 @@
 import Fastify from 'fastify';
 import multipart from '@fastify/multipart';
-import { mkdir, rm, writeFile } from 'node:fs/promises';
-import { basename, extname, join } from 'node:path';
+import { createReadStream } from 'node:fs';
+import { mkdir, rm, stat, writeFile } from 'node:fs/promises';
+import { basename, extname, join, resolve, sep } from 'node:path';
 import { nanoid } from 'nanoid';
 import { z } from 'zod';
 import { assertOfficeCliAvailable, runOfficeCli } from './officecli.js';
@@ -9,9 +10,10 @@ import { assertOfficeCliAvailable, runOfficeCli } from './officecli.js';
 const app = Fastify({ logger: true, bodyLimit: 30 * 1024 * 1024 });
 await app.register(multipart, { limits: { fileSize: 25 * 1024 * 1024, files: 1 } });
 
-const workRoot = process.env.KUKDOCS_WORK_ROOT ?? '/tmp/kukdocs';
+const workRoot = resolve(process.env.KUKDOCS_WORK_ROOT ?? '/tmp/kukdocs');
 const apiKey = process.env.KUKDOCS_API_KEY;
 const allowedExtensions = new Set(['.docx', '.xlsx', '.pptx']);
+const jobIdPattern = /^[A-Za-z0-9_-]{10,40}$/;
 
 app.addHook('onRequest', async (request, reply) => {
   if (!apiKey || request.url === '/health') return;
@@ -50,7 +52,42 @@ app.post('/v1/documents', async (request, reply) => {
     return reply.code(422).send({ jobId, status: 'failed', error: result.stderr || result.stdout });
   }
 
-  return reply.code(201).send({ jobId, status: 'completed', filename });
+  return reply.code(201).send({
+    jobId,
+    status: 'completed',
+    filename,
+    downloadPath: `/v1/documents/${jobId}/${encodeURIComponent(filename)}`
+  });
+});
+
+app.get<{ Params: { jobId: string; filename: string } }>('/v1/documents/:jobId/:filename', async (request, reply) => {
+  const { jobId } = request.params;
+  if (!jobIdPattern.test(jobId)) return reply.code(400).send({ error: 'Invalid job id' });
+
+  const filename = sanitizeFilename(request.params.filename, '');
+  const extension = extname(filename).toLowerCase();
+  if (!filename || !allowedExtensions.has(extension)) return reply.code(400).send({ error: 'Invalid document filename' });
+
+  const jobDir = resolve(workRoot, jobId);
+  const filePath = resolve(jobDir, filename);
+  if (!filePath.startsWith(`${jobDir}${sep}`)) return reply.code(400).send({ error: 'Invalid document path' });
+
+  try {
+    const info = await stat(filePath);
+    if (!info.isFile()) return reply.code(404).send({ error: 'Document not found' });
+  } catch {
+    return reply.code(404).send({ error: 'Document not found' });
+  }
+
+  const contentTypes: Record<string, string> = {
+    '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    '.pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation'
+  };
+
+  reply.header('Content-Type', contentTypes[extension] ?? 'application/octet-stream');
+  reply.header('Content-Disposition', `attachment; filename="${filename}"`);
+  return reply.send(createReadStream(filePath));
 });
 
 app.post('/v1/documents/inspect', async (request, reply) => {
