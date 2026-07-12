@@ -1,0 +1,132 @@
+openapi: 3.1.0
+info:
+  title: KukDocs Engine API
+  version: 0.1.0
+  description: Kuklabs document automation API backed by OfficeCLI.
+servers:
+  - url: http://localhost:8080
+paths:
+  /health:
+    get:
+      operationId: getHealth
+      responses:
+        '200':
+          description: Service health
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                properties:
+                  status:
+                    type: string
+                    const: ok
+  /v1/jobs:
+    post:
+      operationId: createDocumentJob
+      summary: Create an asynchronous document-processing job
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateJobRequest'
+      responses:
+        '202':
+          description: Job accepted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Job'
+    get:
+      operationId: listJobs
+      responses:
+        '200':
+          description: Job list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Job'
+  /v1/jobs/{jobId}:
+    get:
+      operationId: getJob
+      parameters:
+        - in: path
+          name: jobId
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Job status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Job'
+        '404':
+          description: Job not found
+components:
+  schemas:
+    CreateJobRequest:
+      type: object
+      additionalProperties: false
+      required: [operation, input]
+      properties:
+        operation:
+          type: string
+          enum: [create, inspect, edit, render, convert]
+        input:
+          type: object
+          required: [uri]
+          properties:
+            uri:
+              type: string
+            format:
+              type: string
+              enum: [docx, xlsx, pptx]
+        instructions:
+          type: array
+          items:
+            type: object
+            required: [action, target]
+            properties:
+              action:
+                type: string
+              target:
+                type: string
+              properties:
+                type: object
+                additionalProperties: true
+        output:
+          type: object
+          properties:
+            format:
+              type: string
+              enum: [docx, xlsx, pptx, html, png, pdf]
+            destinationUri:
+              type: string
+        metadata:
+          type: object
+          additionalProperties:
+            type: string
+    Job:
+      type: object
+      required: [id, status, createdAt]
+      properties:
+        id:
+          type: string
+        status:
+          type: string
+          enum: [queued, running, succeeded, failed, cancelled]
+        createdAt:
+          type: string
+          format: date-time
+        completedAt:
+          type: [string, 'null']
+          format: date-time
+        outputUri:
+          type: [string, 'null']
+        error:
+          type: [string, 'null']
