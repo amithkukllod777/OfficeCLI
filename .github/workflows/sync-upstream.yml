@@ -1,0 +1,51 @@
+name: Sync upstream OfficeCLI
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '17 3 * * 1'
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout fork
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Fetch upstream
+        run: |
+          git remote add upstream https://github.com/iOfficeAI/OfficeCLI.git || true
+          git fetch upstream main
+
+      - name: Create sync branch
+        id: branch
+        run: |
+          BRANCH="automation/sync-upstream-$(date +%Y%m%d)"
+          git checkout -B "$BRANCH" origin/main
+          git merge --no-edit upstream/main
+          git push --force-with-lease origin "$BRANCH"
+          echo "name=$BRANCH" >> "$GITHUB_OUTPUT"
+
+      - name: Open pull request
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BRANCH: ${{ steps.branch.outputs.name }}
+        run: |
+          gh pr create \
+            --base main \
+            --head "$BRANCH" \
+            --title "Sync upstream OfficeCLI" \
+            --body "Automated upstream synchronization. Review conflicts and Kuklabs integration compatibility before merging." \
+          || gh pr edit "$BRANCH" --add-label "upstream-sync" || true
